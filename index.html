@@ -87,16 +87,15 @@
         // Admin UI Logic
         const SUPER_ADMIN_EMAIL = "admin@tgnonline.com"; 
 
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useRef } = React;
 
         // --- Helper Component for Description (See More/Less) ---
         const DescriptionText = ({ text }) => {
             const [isExpanded, setIsExpanded] = useState(false);
-            const maxLength = 100; // Character limit before truncation
+            const maxLength = 100; 
 
             if (!text) return <p className="text-gray-500 italic text-sm">No description provided.</p>;
 
-            // Check if text needs truncation
             const shouldTruncate = text.length > maxLength;
             
             return (
@@ -131,9 +130,14 @@
             const [lessons, setLessons] = useState([]);
             const [activeCourse, setActiveCourse] = useState(null); 
             const [allUsers, setAllUsers] = useState([]);
+            const [announcements, setAnnouncements] = useState([]); // New for Zoom/News
             
-            const [adminTab, setAdminTab] = useState('courses'); 
+            const [adminTab, setAdminTab] = useState('courses'); // 'courses', 'users', 'announcements'
             const [userFilter, setUserFilter] = useState('all');
+
+            // UI States
+            const [showNotifications, setShowNotifications] = useState(false);
+            const notifRef = useRef(null);
 
             // Form States
             const [email, setEmail] = useState('');
@@ -146,7 +150,11 @@
             const [inputTitle, setInputTitle] = useState('');
             const [inputDesc, setInputDesc] = useState('');
             const [inputVideo, setInputVideo] = useState('');
-            const [inputZoom, setInputZoom] = useState('');
+            // New Input States for Announcements
+            const [announceTitle, setAnnounceTitle] = useState('');
+            const [announceMsg, setAnnounceMsg] = useState('');
+            const [announceLink, setAnnounceLink] = useState('');
+
             const [editingId, setEditingId] = useState(null);
 
             // Full Screen / Theater Mode State
@@ -229,7 +237,19 @@
                 return () => unsubscribe();
             }, [user, accountStatus, activeCourse]);
 
-            // 3. Admin: Fetch All Users
+            // 3. Fetch Announcements (For Notifications & Admin)
+            useEffect(() => {
+                if (!user || accountStatus !== 'approved') return;
+                const q = collection(db, 'announcements');
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    const data = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
+                    data.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+                    setAnnouncements(data);
+                });
+                return () => unsubscribe();
+            }, [user, accountStatus]);
+
+            // 4. Admin: Fetch All Users
             useEffect(() => {
                 if (role !== 'super_admin' || adminTab !== 'users') return;
                 const q = collection(db, 'users');
@@ -240,6 +260,17 @@
                 });
                 return () => unsubscribe();
             }, [role, adminTab]);
+
+            // Click outside handler for notifications
+            useEffect(() => {
+                function handleClickOutside(event) {
+                    if (notifRef.current && !notifRef.current.contains(event.target)) {
+                        setShowNotifications(false);
+                    }
+                }
+                document.addEventListener("mousedown", handleClickOutside);
+                return () => document.removeEventListener("mousedown", handleClickOutside);
+            }, [notifRef]);
 
             // Icon Refresher
             useEffect(() => {
@@ -293,6 +324,30 @@
                 try { await deleteDoc(doc(db, 'users', userId)); } catch (e) { alert("ဖျက်၍မရပါ။"); }
             };
 
+            // --- Announcement Management ---
+            const handlePostAnnouncement = async (e) => {
+                e.preventDefault();
+                if (role !== 'super_admin') return;
+                if (!announceTitle || !announceMsg) return alert("ခေါင်းစဉ်နှင့် စာသား ထည့်ပါ");
+
+                try {
+                    await addDoc(collection(db, 'announcements'), {
+                        title: announceTitle,
+                        message: announceMsg,
+                        link: announceLink,
+                        createdAt: serverTimestamp(),
+                        author: user.displayName || 'Admin'
+                    });
+                    alert("ကြေညာချက် တင်ပြီးပါပြီ!");
+                    setAnnounceTitle(''); setAnnounceMsg(''); setAnnounceLink('');
+                } catch (e) { alert("Error posting announcement."); }
+            };
+
+            const handleDeleteAnnouncement = async (id) => {
+                if(!confirm("ဖျက်ရန် သေချာပါသလား?")) return;
+                try { await deleteDoc(doc(db, 'announcements', id)); } catch(e) { alert("Error deleting."); }
+            };
+
             // --- Course & Lesson Management ---
 
             const handleCreateCourse = async (e) => {
@@ -341,7 +396,7 @@
                         title: inputTitle,
                         description: inputDesc,
                         videoUrl: inputVideo,
-                        zoomLink: inputZoom,
+                        // Removed zoomLink from lesson data
                         updatedAt: serverTimestamp(),
                         author: user.displayName || 'Admin'
                     };
@@ -354,7 +409,7 @@
                         await addDoc(collection(db, 'lessons'), lessonData);
                         alert("သင်ခန်းစာ တင်ပြီးပါပြီ!");
                     }
-                    setInputTitle(''); setInputDesc(''); setInputVideo(''); setInputZoom(''); setEditingId(null);
+                    setInputTitle(''); setInputDesc(''); setInputVideo(''); setEditingId(null);
                 } catch (e) { alert("Error: မအောင်မြင်ပါ။"); }
             };
             
@@ -363,14 +418,13 @@
                 setInputDesc(item.description);
                 if (type === 'lesson') {
                     setInputVideo(item.videoUrl);
-                    setInputZoom(item.zoomLink || '');
                 }
                 setEditingId(item.id);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             };
             
             const handleCancelEdit = () => {
-                setInputTitle(''); setInputDesc(''); setInputVideo(''); setInputZoom('');
+                setInputTitle(''); setInputDesc(''); setInputVideo('');
                 setEditingId(null);
             };
 
@@ -515,14 +569,10 @@
                                     <div className="flex items-start gap-4">
                                         <div className="flex-1">
                                             <h4 className="font-bold text-xl mb-2">{activeLesson.title}</h4>
-                                            {/* Using new Description Component in Modal */}
                                             <div className="text-gray-400 text-sm leading-relaxed whitespace-pre-line">
                                                 {activeLesson.description}
                                             </div>
                                         </div>
-                                        {activeLesson.zoomLink && (
-                                            <a href={activeLesson.zoomLink} target="_blank" className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-bold transition flex items-center gap-2"><i data-lucide="video" className="w-5 h-5"></i> Join Zoom Class</a>
-                                        )}
                                     </div>
                                 </div>
                             </div>
@@ -534,6 +584,52 @@
                         <div className="max-w-6xl mx-auto flex justify-between items-center">
                             <div className="font-bold flex items-center gap-2 text-lg cursor-pointer" onClick={backToCourses}><i data-lucide="book-open" className="w-6 h-6 text-blue-300"></i> TGN Online</div>
                             <div className="flex items-center gap-4">
+                                
+                                {/* Notification Bell */}
+                                <div className="relative" ref={notifRef}>
+                                    <button 
+                                        onClick={() => setShowNotifications(!showNotifications)} 
+                                        className="p-2 rounded-full hover:bg-blue-800 transition relative"
+                                    >
+                                        <i data-lucide="bell" className="w-6 h-6"></i>
+                                        {announcements.length > 0 && (
+                                            <span className="absolute top-1 right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-blue-900"></span>
+                                        )}
+                                    </button>
+
+                                    {/* Dropdown */}
+                                    {showNotifications && (
+                                        <div className="absolute right-0 mt-3 w-80 md:w-96 bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100">
+                                            <div className="bg-gray-50 p-3 border-b border-gray-100 font-bold text-gray-700 flex justify-between items-center">
+                                                <span>အသိပေးချက်များ ({announcements.length})</span>
+                                                <button onClick={()=>setShowNotifications(false)}><i data-lucide="x" className="w-4 h-4"></i></button>
+                                            </div>
+                                            <div className="max-h-[70vh] overflow-y-auto">
+                                                {announcements.length === 0 ? (
+                                                    <div className="p-8 text-center text-gray-500">မရှိသေးပါ။</div>
+                                                ) : (
+                                                    announcements.map((item) => (
+                                                        <div key={item.id} className="p-4 border-b border-gray-100 hover:bg-blue-50 transition">
+                                                            <h4 className="font-bold text-blue-700 mb-1 flex items-center gap-2">
+                                                                <i data-lucide="video" className="w-4 h-4"></i> {item.title}
+                                                            </h4>
+                                                            <p className="text-gray-600 text-sm mb-2 whitespace-pre-line leading-relaxed">{item.message}</p>
+                                                            {item.link && (
+                                                                <a href={item.link} target="_blank" className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full inline-flex items-center gap-1 hover:bg-blue-700 transition">
+                                                                    Join Zoom <i data-lucide="external-link" className="w-3 h-3"></i>
+                                                                </a>
+                                                            )}
+                                                            <div className="mt-2 text-xs text-gray-400 text-right">
+                                                                {item.createdAt?.seconds ? new Date(item.createdAt.seconds * 1000).toLocaleDateString() : ''}
+                                                            </div>
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
                                 <div className="text-right hidden sm:block">
                                     <div className="font-bold">{user?.displayName || 'User'}</div>
                                     <div className="text-xs text-blue-300 uppercase">{role === 'super_admin' ? 'Admin' : 'Student'}</div>
@@ -550,13 +646,43 @@
                             <div className="flex flex-wrap gap-4 mb-6">
                                 <button onClick={() => { setAdminTab('courses'); backToCourses(); }} className={`px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition ${adminTab === 'courses' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}><i data-lucide="folder" className="w-4 h-4"></i> Courses</button>
                                 <button onClick={() => setAdminTab('users')} className={`px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition ${adminTab === 'users' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}><i data-lucide="users" className="w-4 h-4"></i> Users</button>
+                                <button onClick={() => setAdminTab('announcements')} className={`px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition ${adminTab === 'announcements' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}><i data-lucide="megaphone" className="w-4 h-4"></i> News & Zoom</button>
                             </div>
                         )}
 
                         {/* CONTENT AREA */}
                         
-                        {/* 1. Admin Users Tab */}
-                        {role === 'super_admin' && adminTab === 'users' ? (
+                        {/* 1. Admin Announcements Tab */}
+                        {role === 'super_admin' && adminTab === 'announcements' ? (
+                            <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-6">
+                                <h3 className="text-xl font-bold mb-6 flex items-center gap-2"><i data-lucide="megaphone" className="w-6 h-6 text-blue-600"></i> Zoom & News Post</h3>
+                                
+                                <div className="mb-8 bg-blue-50 p-6 rounded-xl border border-blue-100">
+                                    <form onSubmit={handlePostAnnouncement} className="space-y-4">
+                                        <input className="w-full border p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white" placeholder="ခေါင်းစဉ် (Title)" value={announceTitle} onChange={e=>setAnnounceTitle(e.target.value)} required />
+                                        <textarea className="w-full border p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white h-32" placeholder="စာသား/အချိန်/Meeting ID & Passcode..." value={announceMsg} onChange={e=>setAnnounceMsg(e.target.value)} required />
+                                        <input className="w-full border p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white" placeholder="Zoom Link (Optional)" value={announceLink} onChange={e=>setAnnounceLink(e.target.value)} />
+                                        <button className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-blue-700 transition flex items-center gap-2"><i data-lucide="send" className="w-4 h-4"></i> Post Announcement</button>
+                                    </form>
+                                </div>
+
+                                <h4 className="font-bold text-gray-700 mb-4 border-b pb-2">တင်ပြီးသော ပို့စ်များ</h4>
+                                <div className="grid gap-4">
+                                    {announcements.map((item) => (
+                                        <div key={item.id} className="bg-white border p-4 rounded-xl shadow-sm flex justify-between items-start">
+                                            <div>
+                                                <h5 className="font-bold text-lg text-gray-800">{item.title}</h5>
+                                                <p className="text-gray-600 whitespace-pre-line mt-1">{item.message}</p>
+                                                {item.link && <a href={item.link} target="_blank" className="text-blue-600 text-sm hover:underline mt-2 block break-all">{item.link}</a>}
+                                            </div>
+                                            <button onClick={() => handleDeleteAnnouncement(item.id)} className="text-red-500 hover:bg-red-50 p-2 rounded"><i data-lucide="trash-2" className="w-5 h-5"></i></button>
+                                        </div>
+                                    ))}
+                                    {announcements.length === 0 && <p className="text-gray-500">No posts yet.</p>}
+                                </div>
+                            </div>
+                        ) : role === 'super_admin' && adminTab === 'users' ? (
+                            // 2. Admin Users Tab
                             <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-6">
                                 <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
                                     <h3 className="text-xl font-bold flex items-center gap-2"><i data-lucide="settings" className="w-6 h-6 text-blue-600"></i> ကျောင်းသား စီမံခန့်ခွဲမှု ({allUsers.length})</h3>
@@ -590,7 +716,7 @@
                             </div>
                         ) : (
                             <>
-                                {/* 2. COURSE LIST VIEW (Main Dashboard) */}
+                                {/* 3. COURSE LIST VIEW (Main Dashboard) */}
                                 {view === 'courses_list' && (
                                     <>
                                         <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl p-6 md:p-10 text-white mb-8 shadow-lg">
@@ -641,7 +767,7 @@
                                     </>
                                 )}
 
-                                {/* 3. COURSE DETAIL VIEW (Lessons List) */}
+                                {/* 4. COURSE DETAIL VIEW (Lessons List) */}
                                 {view === 'course_detail' && activeCourse && (
                                     <>
                                         <button onClick={backToCourses} className="mb-6 flex items-center text-gray-500 hover:text-blue-600 font-bold transition">
@@ -664,7 +790,6 @@
                                                     <div className="md:col-span-1"><input className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Lesson Title" value={inputTitle} onChange={e=>setInputTitle(e.target.value)} /></div>
                                                     <div className="md:col-span-1"><input className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="YouTube Link" value={inputVideo} onChange={e=>setInputVideo(e.target.value)} /></div>
                                                     <div className="md:col-span-2"><textarea className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" rows="2" placeholder="Description" value={inputDesc} onChange={e=>setInputDesc(e.target.value)} /></div>
-                                                    <div className="md:col-span-2"><input className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Zoom Link (Optional)" value={inputZoom} onChange={e=>setInputZoom(e.target.value)} /></div>
                                                     <button className="md:col-span-2 bg-indigo-600 text-white p-3 rounded-lg font-bold hover:bg-indigo-700 transition">{editingId ? 'Update Lesson' : 'Add to Course'}</button>
                                                 </form>
                                             </div>
@@ -695,16 +820,10 @@
                                                         
                                                         {/* Expandable Lesson Description in Card */}
                                                         <DescriptionText text={lesson.description} />
-
-                                                        {lesson.zoomLink ? (
-                                                            <a href={lesson.zoomLink} target="_blank" className="block text-center bg-blue-50 text-blue-700 border border-blue-200 p-2 rounded-lg font-bold hover:bg-blue-600 hover:text-white transition text-sm">Join Zoom Class</a>
-                                                        ) : (
-                                                            <div className="text-center text-gray-400 text-sm py-2 bg-gray-50 rounded-lg">Video Only</div>
-                                                        )}
                                                     </div>
                                                 </div>
                                             ))}
-                                            {lessons.length === 0 && <div className="col-span-full text-center py-10 text-gray-500">ဒီခေါင်းစဉ်အောက်မှာ Video မရှိသေးပါ။</div>}
+                                            {lessons.length === 0 && <div className="col-span-full text-center py-10 text-gray-500 bg-gray-50 rounded-xl border border-dashed">ဒီခေါင်းစဉ်အောက်မှာ Video မရှိသေးပါ။</div>}
                                         </div>
                                     </>
                                 )}
