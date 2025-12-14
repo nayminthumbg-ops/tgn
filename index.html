@@ -179,32 +179,40 @@
             useEffect(() => {
                 if (!user || accountStatus !== 'approved') return;
                 
-                const q = query(collection(db, 'courses'), orderBy('createdAt', 'desc'));
+                // Using client-side sort for courses to be safe
+                const q = collection(db, 'courses');
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
+                    // Sort descending by created time
+                    data.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
                     setCourses(data);
                     setTimeout(() => window.lucide && window.lucide.createIcons(), 100);
                 });
                 return () => unsubscribe();
             }, [user, accountStatus]);
 
-            // 2. Fetch Lessons (Only when a Course is Active)
+            // 2. Fetch Lessons (Only when a Course is Active) - FIXED INDEX ERROR
             useEffect(() => {
                 if (!user || accountStatus !== 'approved' || !activeCourse) {
-                    setLessons([]); // Clear lessons if no course selected
+                    setLessons([]); 
                     return;
                 }
                 
+                // FIX: Removed 'orderBy' from Firestore query to avoid needing a composite index.
+                // We will sort in memory (JavaScript) instead.
                 const q = query(
                     collection(db, 'lessons'), 
-                    where('courseId', '==', activeCourse.id),
-                    orderBy('createdAt', 'asc') // Playlists usually start from 1
+                    where('courseId', '==', activeCourse.id)
                 );
                 
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
+                    // Sort ascending (Oldest first) for lesson playlist
+                    data.sort((a,b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
                     setLessons(data);
                     setTimeout(() => window.lucide && window.lucide.createIcons(), 100);
+                }, (err) => {
+                    console.error("Lesson fetch error:", err);
                 });
                 
                 return () => unsubscribe();
@@ -213,9 +221,13 @@
             // 3. Admin: Fetch All Users
             useEffect(() => {
                 if (role !== 'super_admin' || adminTab !== 'users') return;
-                const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+                
+                // Client-side sort for users too
+                const q = collection(db, 'users');
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     const users = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
+                    // Sort descending
+                    users.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
                     setAllUsers(users);
                 });
                 return () => unsubscribe();
@@ -313,8 +325,6 @@
 
             const handleDeleteCourse = async (id) => {
                 if(!confirm("ဤခေါင်းစဉ်နှင့်တကွ အောက်ရှိသင်ခန်းစာများအားလုံး ဖျက်မည်မှာ သေချာပါသလား?")) return;
-                // Note: Real apps should recursively delete sub-collections or linked docs. 
-                // Here we just delete the course doc for simplicity.
                 try {
                     await deleteDoc(doc(db, 'courses', id));
                 } catch(e) { alert("Error deleting course"); }
@@ -351,6 +361,7 @@
                     setInputTitle(''); setInputDesc(''); setInputVideo(''); setInputZoom(''); setEditingId(null);
                 } catch (e) {
                     alert("Error: မအောင်မြင်ပါ။");
+                    console.error(e);
                 }
             };
             
@@ -383,7 +394,6 @@
             const openCourse = (course) => {
                 setActiveCourse(course);
                 setView('course_detail');
-                // Reset inputs when switching views
                 handleCancelEdit(); 
             };
 
