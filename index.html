@@ -33,7 +33,6 @@
 
     <!-- Main Script -->
     <script type="text/babel" data-type="module">
-        // Import Firebase from CDN (Web Version)
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
         import { 
             getAuth, 
@@ -61,9 +60,8 @@
             orderBy 
         } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-        // ==========================================
-        // Firebase Config
-        // ==========================================
+        // --- Firebase Configuration ---
+        // Note: These keys are safe to be public as long as Firestore Security Rules are set correctly.
         const firebaseConfig = {
             apiKey: "AIzaSyD7qdx6DsbXzkd3dignrP4OvZV3r-Nc7yc",
             authDomain: "tgn-online-lms.firebaseapp.com",
@@ -77,6 +75,8 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
+        
+        // Admin UI Logic (Security is handled by Firestore Rules, this is just for UI display)
         const SUPER_ADMIN_EMAIL = "admin@tgnonline.com"; 
 
         const { useState, useEffect } = React;
@@ -90,20 +90,19 @@
             const [role, setRole] = useState('student');
             const [loading, setLoading] = useState(true);
             
-            // Input States
+            // Form States
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
             const [name, setName] = useState('');
             const [error, setError] = useState('');
             const [rememberMe, setRememberMe] = useState(true);
             
-            // New Lesson States
+            // Lesson States
             const [newTitle, setNewTitle] = useState('');
             const [newDesc, setNewDesc] = useState('');
             const [newVideo, setNewVideo] = useState('');
             const [newZoom, setNewZoom] = useState('');
             
-            // Edit Mode State
             const [editingId, setEditingId] = useState(null);
 
             // Auth Listener
@@ -131,11 +130,13 @@
                 const q = query(collection(db, 'lessons'), orderBy('createdAt', 'desc'));
                 const unsubscribe = onSnapshot(collection(db, 'lessons'), (snapshot) => {
                     const data = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
+                    // Manual sort fallback
                     data.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
                     setLessons(data);
+                    // Re-render icons after data load
                     setTimeout(() => window.lucide && window.lucide.createIcons(), 100);
                 }, (err) => {
-                    console.error("Error fetching data:", err);
+                    console.error("Data access error (Check Rules):", err);
                 });
                 return () => unsubscribe();
             }, [user]);
@@ -158,7 +159,9 @@
                         await updateProfile(cred.user, { displayName: name });
                     }
                 } catch (error) {
-                    setError(error.message.replace('Firebase:', ''));
+                    let msg = error.message.replace('Firebase:', '').trim();
+                    if(msg.includes('auth/invalid-credential')) msg = "Email သို့မဟုတ် Password မှားယွင်းနေပါသည်။";
+                    setError(msg);
                 }
             };
 
@@ -198,7 +201,7 @@
                     }
                     setNewTitle(''); setNewDesc(''); setNewVideo(''); setNewZoom('');
                 } catch (e) {
-                    alert("Error: Database permission denied or Network issue.");
+                    alert("Error: မအောင်မြင်ပါ။ (Permission Check)");
                     console.error(e);
                 }
             };
@@ -222,25 +225,24 @@
                 try {
                     await deleteDoc(doc(db, 'lessons', id));
                 } catch (e) {
-                    console.error("Delete Error:", e);
                     alert("ဖျက်၍မရပါ။ Permission စစ်ဆေးပါ။");
                 }
             };
 
-            // FIX: Using youtube-nocookie.com which is more friendly for embeds
+            // URL Parser: Handles full iframe codes, short links, and standard links
             const getEmbedUrl = (inputUrl) => {
                 if (!inputUrl) return '';
                 try {
                     let url = inputUrl.trim();
                     let videoId = '';
 
-                    // 1. If user pasted iframe, grab src
+                    // 1. Extract src from iframe tag
                     if (url.includes('<iframe') || url.includes('src=')) {
                         const srcMatch = url.match(/src=["'](.*?)["']/);
                         if (srcMatch && srcMatch[1]) url = srcMatch[1];
                     }
 
-                    // 2. Extract Video ID and Clean Params
+                    // 2. Extract Video ID
                     if (url.includes('v=')) {
                         videoId = url.split('v=')[1].split('&')[0].split('?')[0]; 
                     } else if (url.includes('youtu.be/')) {
@@ -249,10 +251,9 @@
                         videoId = url.split('embed/')[1].split('?')[0].split('"')[0].split("'")[0];
                     }
 
-                    // Using youtube-nocookie domain to avoid some restriction errors
-                    return videoId ? `https://www.youtube-nocookie.com/embed/${videoId}?rel=0` : url;
+                    // Return clean Embed URL (Compatible with most restrictions)
+                    return videoId ? `https://www.youtube.com/embed/${videoId}?rel=0` : url;
                 } catch (e) { 
-                    console.error("Video parse error", e);
                     return inputUrl; 
                 }
             };
@@ -261,7 +262,7 @@
 
             if (loading) return <div className="loading">Loading TGN...</div>;
 
-            // Landing / Login
+            // Login View
             if (!user && view === 'landing') {
                 return (
                     <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
@@ -417,7 +418,7 @@
                                             <button onClick={() => handleDelete(lesson.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-md transition" title="Delete"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
                                         </div>
                                     )}
-                                    {/* Video Container Styled like iPOS Example, REFERRER REMOVED */}
+                                    
                                     <div className="relative aspect-video bg-black rounded-t-xl overflow-hidden shadow-lg border-b border-gray-800">
                                         <iframe 
                                             className="w-full h-full" 
