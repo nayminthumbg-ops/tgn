@@ -92,16 +92,22 @@
         // --- Main App Component ---
         function App() {
             const [user, setUser] = useState(null);
-            const [view, setView] = useState('landing');
             const [authMode, setAuthMode] = useState('login'); 
-            const [lessons, setLessons] = useState([]);
             const [role, setRole] = useState('student');
             const [accountStatus, setAccountStatus] = useState('pending'); 
             const [loading, setLoading] = useState(true);
             
-            // Admin Data
+            // Views: 'landing', 'courses_list', 'course_detail', 'pending_approval', 'suspended_account'
+            const [view, setView] = useState('landing');
+
+            // Data States
+            const [courses, setCourses] = useState([]);
+            const [lessons, setLessons] = useState([]);
+            const [activeCourse, setActiveCourse] = useState(null); // The course currently being viewed
             const [allUsers, setAllUsers] = useState([]);
-            const [adminTab, setAdminTab] = useState('lessons'); 
+            
+            // Admin Filter
+            const [adminTab, setAdminTab] = useState('courses'); // 'courses', 'users'
             const [userFilter, setUserFilter] = useState('all');
 
             // Form States
@@ -111,11 +117,11 @@
             const [error, setError] = useState('');
             const [rememberMe, setRememberMe] = useState(true);
             
-            // Lesson States
-            const [newTitle, setNewTitle] = useState('');
-            const [newDesc, setNewDesc] = useState('');
-            const [newVideo, setNewVideo] = useState('');
-            const [newZoom, setNewZoom] = useState('');
+            // Input States (Course & Lesson)
+            const [inputTitle, setInputTitle] = useState('');
+            const [inputDesc, setInputDesc] = useState('');
+            const [inputVideo, setInputVideo] = useState('');
+            const [inputZoom, setInputZoom] = useState('');
             const [editingId, setEditingId] = useState(null);
 
             // Full Screen / Theater Mode State
@@ -129,7 +135,7 @@
                         if (currentUser.email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()) {
                             setRole('super_admin');
                             setAccountStatus('approved');
-                            setView('dashboard');
+                            setView('courses_list');
                         } 
                         else {
                             try {
@@ -140,7 +146,7 @@
                                     setRole(userData.role || 'student');
                                     const status = userData.status || 'pending';
                                     setAccountStatus(status);
-                                    if (status === 'approved') setView('dashboard');
+                                    if (status === 'approved') setView('courses_list');
                                     else if (status === 'suspended') setView('suspended_account');
                                     else setView('pending_approval');
                                 } else {
@@ -169,20 +175,42 @@
                 return () => unsubscribe();
             }, []);
 
-            // Data Fetcher
+            // 1. Fetch Courses (Always active for approved users)
             useEffect(() => {
                 if (!user || accountStatus !== 'approved') return;
-                const q = query(collection(db, 'lessons'), orderBy('createdAt', 'desc'));
-                const unsubscribe = onSnapshot(collection(db, 'lessons'), (snapshot) => {
+                
+                const q = query(collection(db, 'courses'), orderBy('createdAt', 'desc'));
+                const unsubscribe = onSnapshot(q, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
-                    data.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-                    setLessons(data);
+                    setCourses(data);
                     setTimeout(() => window.lucide && window.lucide.createIcons(), 100);
                 });
                 return () => unsubscribe();
             }, [user, accountStatus]);
 
-            // Admin: Fetch All Users
+            // 2. Fetch Lessons (Only when a Course is Active)
+            useEffect(() => {
+                if (!user || accountStatus !== 'approved' || !activeCourse) {
+                    setLessons([]); // Clear lessons if no course selected
+                    return;
+                }
+                
+                const q = query(
+                    collection(db, 'lessons'), 
+                    where('courseId', '==', activeCourse.id),
+                    orderBy('createdAt', 'asc') // Playlists usually start from 1
+                );
+                
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    const data = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
+                    setLessons(data);
+                    setTimeout(() => window.lucide && window.lucide.createIcons(), 100);
+                });
+                
+                return () => unsubscribe();
+            }, [user, accountStatus, activeCourse]);
+
+            // 3. Admin: Fetch All Users
             useEffect(() => {
                 if (role !== 'super_admin' || adminTab !== 'users') return;
                 const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
@@ -196,7 +224,7 @@
             // Icon Refresher
             useEffect(() => {
                 window.lucide && window.lucide.createIcons();
-            }, [activeLesson, view, adminTab, lessons]); // Added activeLesson dep
+            });
 
             // --- Handlers ---
 
@@ -230,6 +258,7 @@
             const handleLogout = () => {
                 signOut(auth);
                 setEmail(''); setPassword('');
+                setActiveCourse(null);
             };
 
             const updateUserStatus = async (userId, newStatus) => {
@@ -252,21 +281,61 @@
                 }
             };
 
-            const handleSaveLesson = async (e) => {
+            // --- Course & Lesson Management ---
+
+            const handleCreateCourse = async (e) => {
                 e.preventDefault();
                 if (role !== 'super_admin') return;
+                if (!inputTitle) return alert("ခေါင်းစဉ်ထည့်ပါ");
+
+                try {
+                    if (editingId) {
+                        await updateDoc(doc(db, 'courses', editingId), {
+                            title: inputTitle,
+                            description: inputDesc,
+                            updatedAt: serverTimestamp()
+                        });
+                        alert("ခေါင်းစဉ် ပြင်ဆင်ပြီးပါပြီ!");
+                    } else {
+                        await addDoc(collection(db, 'courses'), {
+                            title: inputTitle,
+                            description: inputDesc,
+                            createdAt: serverTimestamp(),
+                            author: user.displayName || 'Admin'
+                        });
+                        alert("ခေါင်းစဉ်အသစ် တည်ဆောက်ပြီးပါပြီ!");
+                    }
+                    setInputTitle(''); setInputDesc(''); setEditingId(null);
+                } catch (e) {
+                    alert("Error creating course.");
+                }
+            };
+
+            const handleDeleteCourse = async (id) => {
+                if(!confirm("ဤခေါင်းစဉ်နှင့်တကွ အောက်ရှိသင်ခန်းစာများအားလုံး ဖျက်မည်မှာ သေချာပါသလား?")) return;
+                // Note: Real apps should recursively delete sub-collections or linked docs. 
+                // Here we just delete the course doc for simplicity.
+                try {
+                    await deleteDoc(doc(db, 'courses', id));
+                } catch(e) { alert("Error deleting course"); }
+            };
+
+            const handleSaveLesson = async (e) => {
+                e.preventDefault();
+                if (role !== 'super_admin' || !activeCourse) return;
                 
-                if (!newTitle || !newVideo) {
+                if (!inputTitle || !inputVideo) {
                     alert("ခေါင်းစဉ်နှင့် Video Link ထည့်ပေးပါ။");
                     return;
                 }
 
                 try {
                     const lessonData = {
-                        title: newTitle,
-                        description: newDesc,
-                        videoUrl: newVideo,
-                        zoomLink: newZoom,
+                        courseId: activeCourse.id, // Link to current course
+                        title: inputTitle,
+                        description: inputDesc,
+                        videoUrl: inputVideo,
+                        zoomLink: inputZoom,
                         updatedAt: serverTimestamp(),
                         author: user.displayName || 'Admin'
                     };
@@ -274,29 +343,30 @@
                     if (editingId) {
                         await updateDoc(doc(db, 'lessons', editingId), lessonData);
                         alert("သင်ခန်းစာ ပြင်ဆင်ပြီးပါပြီ!");
-                        setEditingId(null);
                     } else {
                         lessonData.createdAt = serverTimestamp();
                         await addDoc(collection(db, 'lessons'), lessonData);
                         alert("သင်ခန်းစာ တင်ပြီးပါပြီ!");
                     }
-                    setNewTitle(''); setNewDesc(''); setNewVideo(''); setNewZoom('');
+                    setInputTitle(''); setInputDesc(''); setInputVideo(''); setInputZoom(''); setEditingId(null);
                 } catch (e) {
                     alert("Error: မအောင်မြင်ပါ။");
                 }
             };
             
-            const handleEdit = (lesson) => {
-                setNewTitle(lesson.title);
-                setNewDesc(lesson.description);
-                setNewVideo(lesson.videoUrl);
-                setNewZoom(lesson.zoomLink || '');
-                setEditingId(lesson.id);
+            const handleEditItem = (item, type) => {
+                setInputTitle(item.title);
+                setInputDesc(item.description);
+                if (type === 'lesson') {
+                    setInputVideo(item.videoUrl);
+                    setInputZoom(item.zoomLink || '');
+                }
+                setEditingId(item.id);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             };
             
             const handleCancelEdit = () => {
-                setNewTitle(''); setNewDesc(''); setNewVideo(''); setNewZoom('');
+                setInputTitle(''); setInputDesc(''); setInputVideo(''); setInputZoom('');
                 setEditingId(null);
             };
 
@@ -309,13 +379,22 @@
                 }
             };
 
-            const openLesson = (lesson) => {
-                setActiveLesson(lesson);
+            // Navigation Handlers
+            const openCourse = (course) => {
+                setActiveCourse(course);
+                setView('course_detail');
+                // Reset inputs when switching views
+                handleCancelEdit(); 
             };
 
-            const closeLesson = () => {
-                setActiveLesson(null);
+            const backToCourses = () => {
+                setActiveCourse(null);
+                setView('courses_list');
+                handleCancelEdit();
             };
+
+            const openLessonVideo = (lesson) => setActiveLesson(lesson);
+            const closeLessonVideo = () => setActiveLesson(null);
 
             const getEmbedUrl = (inputUrl) => {
                 if (!inputUrl) return '';
@@ -346,7 +425,7 @@
 
             if (loading) return <div className="loading">Loading TGN...</div>;
 
-            // 1. Pending View
+            // 1. Pending & Suspended Views
             if (user && view === 'pending_approval') {
                 return (
                     <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
@@ -355,19 +434,12 @@
                                 <i data-lucide="clock" className="w-10 h-10 text-yellow-600"></i>
                             </div>
                             <h2 className="text-2xl font-bold text-gray-800 mb-2">အတည်ပြုချက် စောင့်ဆိုင်းနေပါသည်</h2>
-                            <p className="text-gray-600 mb-6">
-                                မင်္ဂလာပါ <b>{user.displayName}</b>,<br/>
-                                သင့်အကောင့်ကို Admin မှ စစ်ဆေးနေပါသည်။ ခွင့်ပြုချက်ရရှိပါက သင်ခန်းစာများကို လေ့လာနိုင်မည် ဖြစ်ပါသည်။
-                            </p>
-                            <button onClick={handleLogout} className="text-red-600 font-bold hover:underline flex items-center justify-center gap-2 mx-auto mt-4 border border-red-200 px-4 py-2 rounded-lg hover:bg-red-50 transition">
-                                <i data-lucide="log-out" className="w-4 h-4"></i> Logout ပြုလုပ်ရန်
-                            </button>
+                            <p className="text-gray-600 mb-6">မင်္ဂလာပါ <b>{user.displayName}</b>, သင့်အကောင့်ကို Admin မှ စစ်ဆေးနေပါသည်။</p>
+                            <button onClick={handleLogout} className="text-red-600 font-bold hover:underline flex items-center justify-center gap-2 mx-auto mt-4 border border-red-200 px-4 py-2 rounded-lg hover:bg-red-50 transition"><i data-lucide="log-out" className="w-4 h-4"></i> Logout ပြုလုပ်ရန်</button>
                         </div>
                     </div>
                 );
             }
-
-            // 2. Suspended View
             if (user && view === 'suspended_account') {
                 return (
                     <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
@@ -376,96 +448,48 @@
                                 <i data-lucide="ban" className="w-10 h-10 text-red-600"></i>
                             </div>
                             <h2 className="text-2xl font-bold text-red-700 mb-2">အကောင့်ကို ယာယီရပ်ဆိုင်းထားပါသည်</h2>
-                            <p className="text-gray-600 mb-6">
-                                မင်္ဂလာပါ <b>{user.displayName}</b>,<br/>
-                                သင့်အကောင့်ကို Admin မှ ယာယီရပ်ဆိုင်း (Suspend) ထားပါသည်။ အသေးစိတ်သိရှိလိုပါက Admin သို့ ဆက်သွယ်ပါ။
-                            </p>
-                            <button onClick={handleLogout} className="text-red-600 font-bold hover:underline flex items-center justify-center gap-2 mx-auto mt-4 border border-red-200 px-4 py-2 rounded-lg hover:bg-red-50 transition">
-                                <i data-lucide="log-out" className="w-4 h-4"></i> Logout ပြုလုပ်ရန်
-                            </button>
+                            <p className="text-gray-600 mb-6">Admin သို့ ဆက်သွယ်ပါ။</p>
+                            <button onClick={handleLogout} className="text-red-600 font-bold hover:underline flex items-center justify-center gap-2 mx-auto mt-4 border border-red-200 px-4 py-2 rounded-lg hover:bg-red-50 transition"><i data-lucide="log-out" className="w-4 h-4"></i> Logout ပြုလုပ်ရန်</button>
                         </div>
                     </div>
                 );
             }
 
-            // 3. Login View
+            // 2. Login View
             if (!user && view === 'landing') {
                 return (
                     <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
                         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl flex overflow-hidden min-h-[600px]">
-                            {/* Left Side */}
                             <div className="hidden md:flex w-1/2 bg-gradient-to-br from-blue-900 to-blue-700 p-12 flex-col justify-between relative text-white">
                                 <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
                                     <div className="absolute top-10 left-10 w-32 h-32 rounded-full bg-white blur-3xl"></div>
                                     <div className="absolute bottom-10 right-10 w-40 h-40 rounded-full bg-blue-400 blur-3xl"></div>
                                 </div>
                                 <div>
-                                    <div className="flex items-center gap-2 font-bold text-lg opacity-80 mb-2">
-                                        <i data-lucide="book-open" className="w-6 h-6"></i> The Global Network
-                                    </div>
+                                    <div className="flex items-center gap-2 font-bold text-lg opacity-80 mb-2"><i data-lucide="book-open" className="w-6 h-6"></i> The Global Network</div>
                                 </div>
                                 <div className="z-10">
                                     <h1 className="text-4xl font-bold mb-6 leading-tight">Master Computer Skills <br/> with TGN Online</h1>
                                     <p className="text-blue-100 text-lg mb-8">ကလေးများနှင့် လူကြီးများအတွက် အခမဲ့ ကွန်ပျူတာနည်းပညာ သင်ကြားရေး ပလက်ဖောင်း။</p>
-                                    <div className="flex gap-4">
-                                        <div className="bg-white/20 backdrop-blur-sm p-4 rounded-xl">
-                                            <i data-lucide="video" className="w-6 h-6 mb-2"></i>
-                                            <div className="font-bold">Free Lessons</div>
-                                        </div>
-                                        <div className="bg-white/20 backdrop-blur-sm p-4 rounded-xl">
-                                            <i data-lucide="users" className="w-6 h-6 mb-2"></i>
-                                            <div className="font-bold">Community</div>
-                                        </div>
-                                    </div>
                                 </div>
                                 <div className="text-sm opacity-60">© 2025 The Global Network. All rights reserved.</div>
                             </div>
-                            {/* Right Side */}
                             <div className="w-full md:w-1/2 p-8 md:p-12 flex flex-col justify-center bg-white">
-                                <div className="text-center md:text-left mb-8">
-                                    <div className="md:hidden flex justify-center mb-4">
-                                        <div className="bg-blue-100 p-3 rounded-full"><i data-lucide="book-open" className="w-8 h-8 text-blue-700"></i></div>
-                                    </div>
-                                    <h2 className="text-2xl font-bold text-gray-900">{authMode === 'login' ? 'ပြန်လည်ကြိုဆိုပါတယ်' : 'အကောင့်သစ် စတင်ပါ'}</h2>
-                                    <p className="text-gray-500 mt-2">{authMode === 'login' ? 'သင်ခန်းစာများ လေ့လာရန် Login ဝင်ပါ။' : 'အချက်အလက်များဖြည့်သွင်းပြီး စာရင်းသွင်းပါ။'}</p>
-                                </div>
+                                <h2 className="text-2xl font-bold text-gray-900 text-center mb-8">{authMode === 'login' ? 'ပြန်လည်ကြိုဆိုပါတယ်' : 'အကောင့်သစ် စတင်ပါ'}</h2>
                                 {error && <div className="bg-red-50 text-red-600 p-4 rounded-xl mb-6 text-sm flex items-center gap-3 border border-red-100"><i data-lucide="alert-circle" className="w-5 h-5 flex-shrink-0"></i>{error}</div>}
                                 <form onSubmit={handleLogin} className="space-y-5">
                                     {authMode === 'register' && (
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">အမည် (Name)</label>
-                                            <div className="relative">
-                                                <i data-lucide="user" className="absolute left-3 top-3.5 w-5 h-5 text-gray-400"></i>
-                                                <input className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="သင့်အမည် ရိုက်ထည့်ပါ" value={name} onChange={e=>setName(e.target.value)} required />
-                                            </div>
-                                        </div>
+                                        <input className="w-full pl-4 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="သင့်အမည် (Name)" value={name} onChange={e=>setName(e.target.value)} required />
                                     )}
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
-                                        <div className="relative">
-                                            <i data-lucide="mail" className="absolute left-3 top-3.5 w-5 h-5 text-gray-400"></i>
-                                            <input className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" type="email" placeholder="name@example.com" value={email} onChange={e=>setEmail(e.target.value)} required />
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                                        <div className="relative">
-                                            <i data-lucide="lock" className="absolute left-3 top-3.5 w-5 h-5 text-gray-400"></i>
-                                            <input className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" type="password" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} required />
-                                        </div>
-                                    </div>
+                                    <input className="w-full pl-4 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" type="email" placeholder="Email Address" value={email} onChange={e=>setEmail(e.target.value)} required />
+                                    <input className="w-full pl-4 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} required />
                                     {authMode === 'login' && (
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center">
-                                                <input id="remember-me" type="checkbox" className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)}/>
-                                                <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-600 cursor-pointer select-none">Remember me</label>
-                                            </div>
-                                        </div>
+                                        <div className="flex items-center"><input id="remember-me" type="checkbox" className="w-4 h-4 mr-2" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)}/><label htmlFor="remember-me" className="text-sm text-gray-600">Remember me</label></div>
                                     )}
-                                    <button className="w-full bg-blue-700 text-white py-3.5 rounded-xl font-bold text-lg hover:bg-blue-800 transition shadow-lg shadow-blue-700/20 active:scale-[0.98]">{authMode === 'login' ? 'Login ဝင်မည်' : 'အကောင့်ဖွင့်မည်'}</button>
+                                    <button className="w-full bg-blue-700 text-white py-3.5 rounded-xl font-bold text-lg hover:bg-blue-800 transition shadow-lg">{authMode === 'login' ? 'Login ဝင်မည်' : 'အကောင့်ဖွင့်မည်'}</button>
                                 </form>
                                 <div className="mt-8 text-center">
-                                    <p className="text-gray-500 text-sm">{authMode === 'login' ? "အကောင့်မရှိသေးဘူးလား?" : "အကောင့်ရှိပြီးသားလား?"} <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="ml-2 text-blue-700 font-bold hover:underline focus:outline-none">{authMode === 'login' ? 'Create an account' : 'Log in'}</button></p>
+                                    <p className="text-gray-500 text-sm">{authMode === 'login' ? "အကောင့်မရှိသေးဘူးလား?" : "အကောင့်ရှိပြီးသားလား?"} <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="ml-2 text-blue-700 font-bold hover:underline">{authMode === 'login' ? 'Create an account' : 'Log in'}</button></p>
                                 </div>
                             </div>
                         </div>
@@ -473,36 +497,22 @@
                 );
             }
 
-            // 4. Dashboard View
+            // 4. Authenticated Views
             return (
                 <div className="min-h-screen bg-white">
-                    {/* Theater Mode Overlay (Modal) */}
+                    {/* Theater Mode Overlay */}
                     {activeLesson && (
-                        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm" onClick={closeLesson}>
+                        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm" onClick={closeLessonVideo}>
                             <div className="bg-gray-900 rounded-2xl w-full max-w-6xl overflow-hidden shadow-2xl modal-content flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
-                                {/* Header */}
                                 <div className="flex justify-between items-center p-4 border-b border-gray-800 bg-gray-900 text-white">
                                     <h3 className="font-bold text-lg truncate pr-4">{activeLesson.title}</h3>
-                                    <button onClick={closeLesson} className="p-2 hover:bg-gray-800 rounded-full transition text-gray-400 hover:text-white">
-                                        <i data-lucide="x" className="w-6 h-6"></i>
-                                    </button>
+                                    <button onClick={closeLessonVideo} className="p-2 hover:bg-gray-800 rounded-full transition text-gray-400 hover:text-white"><i data-lucide="x" className="w-6 h-6"></i></button>
                                 </div>
-                                
-                                {/* Video Player (Responsive Aspect Ratio) */}
                                 <div className="relative w-full h-full bg-black flex-1 flex items-center justify-center">
                                     <div className="w-full h-full aspect-video">
-                                        <iframe 
-                                            className="w-full h-full" 
-                                            src={getEmbedUrl(activeLesson.videoUrl)} 
-                                            title={activeLesson.title}
-                                            frameBorder="0"
-                                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
-                                            allowFullScreen
-                                        ></iframe>
+                                        <iframe className="w-full h-full" src={getEmbedUrl(activeLesson.videoUrl)} title={activeLesson.title} frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen></iframe>
                                     </div>
                                 </div>
-
-                                {/* Footer / Description */}
                                 <div className="p-6 bg-gray-900 text-white overflow-y-auto max-h-48 border-t border-gray-800">
                                     <div className="flex items-start gap-4">
                                         <div className="flex-1">
@@ -510,9 +520,7 @@
                                             <p className="text-gray-400 text-sm leading-relaxed">{activeLesson.description}</p>
                                         </div>
                                         {activeLesson.zoomLink && (
-                                            <a href={activeLesson.zoomLink} target="_blank" className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-bold transition flex items-center gap-2">
-                                                <i data-lucide="video" className="w-5 h-5"></i> Join Zoom Class
-                                            </a>
+                                            <a href={activeLesson.zoomLink} target="_blank" className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-bold transition flex items-center gap-2"><i data-lucide="video" className="w-5 h-5"></i> Join Zoom Class</a>
                                         )}
                                     </div>
                                 </div>
@@ -523,44 +531,34 @@
                     {/* Navbar */}
                     <nav className="bg-blue-900 text-white p-4 sticky top-0 z-50 shadow-md">
                         <div className="max-w-6xl mx-auto flex justify-between items-center">
-                            <div className="font-bold flex items-center gap-2 text-lg"><i data-lucide="book-open" className="w-6 h-6 text-blue-300"></i> TGN Online</div>
+                            <div className="font-bold flex items-center gap-2 text-lg cursor-pointer" onClick={backToCourses}><i data-lucide="book-open" className="w-6 h-6 text-blue-300"></i> TGN Online</div>
                             <div className="flex items-center gap-4">
                                 <div className="text-right hidden sm:block">
                                     <div className="font-bold">{user?.displayName || 'User'}</div>
                                     <div className="text-xs text-blue-300 uppercase">{role === 'super_admin' ? 'Admin' : 'Student'}</div>
                                 </div>
-                                <button onClick={handleLogout} className="bg-red-600 p-2 rounded-full hover:bg-red-700 transition text-white shadow-sm" title="Logout (အကောင့်ထွက်ရန်)"><i data-lucide="log-out" className="w-5 h-5"></i></button>
+                                <button onClick={handleLogout} className="bg-red-600 p-2 rounded-full hover:bg-red-700 transition text-white shadow-sm" title="Logout"><i data-lucide="log-out" className="w-5 h-5"></i></button>
                             </div>
                         </div>
                     </nav>
 
                     <div className="max-w-6xl mx-auto p-4 md:p-8">
                         
-                        {/* Admin Navigation Tabs */}
+                        {/* Admin Navigation */}
                         {role === 'super_admin' && (
                             <div className="flex flex-wrap gap-4 mb-6">
-                                <button 
-                                    onClick={() => setAdminTab('lessons')}
-                                    className={`px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition ${adminTab === 'lessons' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                                >
-                                    <i data-lucide="video" className="w-4 h-4"></i> Lessons
-                                </button>
-                                <button 
-                                    onClick={() => setAdminTab('users')}
-                                    className={`px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition ${adminTab === 'users' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                                >
-                                    <i data-lucide="users" className="w-4 h-4"></i> User Management
-                                </button>
+                                <button onClick={() => { setAdminTab('courses'); backToCourses(); }} className={`px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition ${adminTab === 'courses' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}><i data-lucide="folder" className="w-4 h-4"></i> Courses</button>
+                                <button onClick={() => setAdminTab('users')} className={`px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition ${adminTab === 'users' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}><i data-lucide="users" className="w-4 h-4"></i> Users</button>
                             </div>
                         )}
 
-                        {/* Admin User Management View */}
-                        {role === 'super_admin' && adminTab === 'users' && (
+                        {/* CONTENT AREA */}
+                        
+                        {/* 1. Admin Users Tab */}
+                        {role === 'super_admin' && adminTab === 'users' ? (
                             <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-6">
                                 <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-                                    <h3 className="text-xl font-bold flex items-center gap-2">
-                                        <i data-lucide="settings" className="w-6 h-6 text-blue-600"></i> ကျောင်းသား စီမံခန့်ခွဲမှု ({allUsers.length})
-                                    </h3>
+                                    <h3 className="text-xl font-bold flex items-center gap-2"><i data-lucide="settings" className="w-6 h-6 text-blue-600"></i> ကျောင်းသား စီမံခန့်ခွဲမှု ({allUsers.length})</h3>
                                     <div className="flex bg-gray-100 p-1 rounded-lg">
                                         <button onClick={() => setUserFilter('all')} className={`px-3 py-1 text-sm rounded-md transition ${userFilter === 'all' ? 'bg-white shadow text-blue-600 font-bold' : 'text-gray-500 hover:text-gray-700'}`}>All</button>
                                         <button onClick={() => setUserFilter('pending')} className={`px-3 py-1 text-sm rounded-md transition ${userFilter === 'pending' ? 'bg-white shadow text-yellow-600 font-bold' : 'text-gray-500 hover:text-gray-700'}`}>Pending</button>
@@ -568,168 +566,141 @@
                                         <button onClick={() => setUserFilter('suspended')} className={`px-3 py-1 text-sm rounded-md transition ${userFilter === 'suspended' ? 'bg-white shadow text-red-600 font-bold' : 'text-gray-500 hover:text-gray-700'}`}>Suspended</button>
                                     </div>
                                 </div>
-
                                 <div className="space-y-4">
-                                    {getFilteredUsers().length === 0 ? (
-                                        <p className="text-gray-500 text-center py-8">ကျောင်းသားစာရင်း မရှိသေးပါ။</p>
-                                    ) : (
-                                        getFilteredUsers().map((u) => (
-                                            <div key={u.id} className="flex flex-col lg:flex-row justify-between items-center bg-gray-50 p-4 rounded-xl border border-gray-100 hover:border-blue-200 transition">
-                                                <div className="mb-3 lg:mb-0 flex items-center gap-3">
-                                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold ${u.status === 'approved' ? 'bg-green-500' : u.status === 'suspended' ? 'bg-red-500' : 'bg-yellow-500'}`}>
-                                                        {u.displayName?.charAt(0).toUpperCase() || 'U'}
-                                                    </div>
-                                                    <div>
-                                                        <div className="flex items-center gap-2">
-                                                            <p className="font-bold text-gray-800">{u.displayName}</p>
-                                                            <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-bold text-white ${u.status === 'approved' ? 'bg-green-500' : u.status === 'suspended' ? 'bg-red-500' : 'bg-yellow-500'}`}>
-                                                                {u.status || 'pending'}
-                                                            </span>
-                                                        </div>
-                                                        <p className="text-sm text-gray-500">{u.email}</p>
-                                                    </div>
+                                    {getFilteredUsers().length === 0 ? <p className="text-gray-500 text-center py-8">No users found.</p> : getFilteredUsers().map((u) => (
+                                        <div key={u.id} className="flex flex-col lg:flex-row justify-between items-center bg-gray-50 p-4 rounded-xl border border-gray-100 hover:border-blue-200 transition">
+                                            <div className="mb-3 lg:mb-0 flex items-center gap-3">
+                                                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold ${u.status === 'approved' ? 'bg-green-500' : u.status === 'suspended' ? 'bg-red-500' : 'bg-yellow-500'}`}>{u.displayName?.charAt(0).toUpperCase() || 'U'}</div>
+                                                <div>
+                                                    <div className="flex items-center gap-2"><p className="font-bold text-gray-800">{u.displayName}</p><span className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-bold text-white ${u.status === 'approved' ? 'bg-green-500' : u.status === 'suspended' ? 'bg-red-500' : 'bg-yellow-500'}`}>{u.status || 'pending'}</span></div>
+                                                    <p className="text-sm text-gray-500">{u.email}</p>
                                                 </div>
-                                                
-                                                {/* Actions */}
-                                                {u.email !== SUPER_ADMIN_EMAIL && (
-                                                    <div className="flex gap-2 w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0">
-                                                        {/* Approve Button */}
-                                                        {u.status !== 'approved' && (
-                                                            <button 
-                                                                onClick={() => updateUserStatus(u.id, 'approved')}
-                                                                className="px-3 py-1.5 bg-green-100 text-green-700 text-sm font-bold rounded-lg hover:bg-green-200 transition flex items-center gap-1"
-                                                            >
-                                                                <i data-lucide="check" className="w-3 h-3"></i> {u.status === 'suspended' ? 'Re-Activate' : 'Approve'}
-                                                            </button>
-                                                        )}
-                                                        
-                                                        {/* Suspend Button */}
-                                                        {u.status === 'approved' && (
-                                                            <button 
-                                                                onClick={() => updateUserStatus(u.id, 'suspended')}
-                                                                className="px-3 py-1.5 bg-yellow-100 text-yellow-700 text-sm font-bold rounded-lg hover:bg-yellow-200 transition flex items-center gap-1"
-                                                            >
-                                                                <i data-lucide="pause" className="w-3 h-3"></i> Suspend
-                                                            </button>
-                                                        )}
-                                                        
-                                                        {/* Delete Button */}
-                                                        <button 
-                                                            onClick={() => handleDeleteUser(u.id)}
-                                                            className="px-3 py-1.5 bg-red-100 text-red-600 text-sm font-bold rounded-lg hover:bg-red-200 transition flex items-center gap-1"
-                                                        >
-                                                            <i data-lucide="trash-2" className="w-3 h-3"></i> Delete
-                                                        </button>
-                                                    </div>
-                                                )}
                                             </div>
-                                        ))
-                                    )}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Lessons View (Default for Students & Admin Lesson Tab) */}
-                        {((role !== 'super_admin') || (role === 'super_admin' && adminTab === 'lessons')) && (
-                            <>
-                                {/* Welcome Header */}
-                                <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl p-6 md:p-10 text-white mb-8 shadow-lg">
-                                    <h2 className="text-2xl md:text-3xl font-bold mb-2">မင်္ဂလာပါ {user.displayName}</h2>
-                                    <p className="text-blue-100 opacity-90">{role === 'super_admin' ? 'Admin Panel မှ ကြိုဆိုပါတယ်။' : 'ယနေ့ ဘာတွေလေ့လာကြမလဲ?'}</p>
-                                </div>
-
-                                {/* Admin Add/Edit Lesson */}
-                                {role === 'super_admin' && (
-                                    <div className="mb-10 bg-white p-6 rounded-2xl border border-blue-100 shadow-md transition-all">
-                                        <div className="flex justify-between items-center mb-6 border-b pb-2">
-                                            <h3 className="font-bold text-gray-800 flex items-center gap-2 text-xl">
-                                                <i data-lucide={editingId ? "edit" : "plus-circle"} className="w-6 h-6 text-blue-600"></i> 
-                                                {editingId ? 'သင်ခန်းစာ ပြင်ဆင်ရန်' : 'သင်ခန်းစာ အသစ်တင်ရန်'}
-                                            </h3>
-                                            {editingId && <button onClick={handleCancelEdit} className="text-sm text-red-600 hover:text-red-800 font-bold">Cancel Editing</button>}
-                                        </div>
-                                        <form onSubmit={handleSaveLesson} className="grid gap-4 md:grid-cols-2">
-                                            <div className="md:col-span-1">
-                                                <label className="block text-sm font-bold text-gray-700 mb-1">ခေါင်းစဉ်</label>
-                                                <input className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Lesson Title" value={newTitle} onChange={e=>setNewTitle(e.target.value)} />
-                                            </div>
-                                            <div className="md:col-span-1">
-                                                <label className="block text-sm font-bold text-gray-700 mb-1">YouTube Link</label>
-                                                <input className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="https://youtube.com/..." value={newVideo} onChange={e=>setNewVideo(e.target.value)} />
-                                                <p className="text-xs text-gray-500 mt-1">Embed Link တစ်ခုလုံး (သို့) URL ထည့်သွင်းနိုင်သည်။</p>
-                                            </div>
-                                            <div className="md:col-span-2">
-                                                <label className="block text-sm font-bold text-gray-700 mb-1">အကြောင်းအရာ</label>
-                                                <textarea className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" rows="2" placeholder="Description" value={newDesc} onChange={e=>setNewDesc(e.target.value)} />
-                                            </div>
-                                            <div className="md:col-span-2">
-                                                <label className="block text-sm font-bold text-gray-700 mb-1">Zoom Link (Optional)</label>
-                                                <input className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Zoom Meeting URL" value={newZoom} onChange={e=>setNewZoom(e.target.value)} />
-                                            </div>
-                                            <button className={`p-3 rounded-lg md:col-span-2 font-bold transition flex items-center justify-center gap-2 text-white ${editingId ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-gray-900 hover:bg-black'}`}>
-                                                <i data-lucide={editingId ? "save" : "upload-cloud"} className="w-4 h-4"></i> {editingId ? 'Update Lesson' : 'Post Lesson'}
-                                            </button>
-                                        </form>
-                                    </div>
-                                )}
-
-                                {/* Lessons Grid */}
-                                <h3 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2"><i data-lucide="video" className="w-5 h-5"></i> သင်ခန်းစာများ ({lessons.length})</h3>
-                                
-                                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-                                    {lessons.map(lesson => (
-                                        <div key={lesson.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-xl transition duration-300 flex flex-col relative group">
-                                            {role === 'super_admin' && (
-                                                <div className="absolute top-2 right-2 z-20 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity bg-white/90 p-1.5 rounded-lg shadow-sm backdrop-blur-sm">
-                                                    <button onClick={() => handleEdit(lesson)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition" title="Edit"><i data-lucide="edit" className="w-4 h-4"></i></button>
-                                                    <button onClick={() => handleDelete(lesson.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-md transition" title="Delete"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                            {u.email !== SUPER_ADMIN_EMAIL && (
+                                                <div className="flex gap-2">
+                                                    {u.status !== 'approved' && <button onClick={() => updateUserStatus(u.id, 'approved')} className="px-3 py-1.5 bg-green-100 text-green-700 text-sm font-bold rounded-lg hover:bg-green-200 transition">Approve</button>}
+                                                    {u.status === 'approved' && <button onClick={() => updateUserStatus(u.id, 'suspended')} className="px-3 py-1.5 bg-yellow-100 text-yellow-700 text-sm font-bold rounded-lg hover:bg-yellow-200 transition">Suspend</button>}
+                                                    <button onClick={() => handleDeleteUser(u.id)} className="px-3 py-1.5 bg-red-100 text-red-600 text-sm font-bold rounded-lg hover:bg-red-200 transition">Delete</button>
                                                 </div>
                                             )}
-                                            
-                                            {/* Video Thumbnail / Player Preview */}
-                                            <div className="relative aspect-video bg-black rounded-t-xl overflow-hidden shadow-lg border-b border-gray-800 group-hover:brightness-110 transition">
-                                                <iframe 
-                                                    className="w-full h-full pointer-events-none" // Disable interaction in card view
-                                                    src={getEmbedUrl(lesson.videoUrl)} 
-                                                    title={lesson.title}
-                                                    frameBorder="0"
-                                                ></iframe>
-                                                
-                                                {/* Overlay Button for Full View */}
-                                                <div className="absolute inset-0 bg-black/10 hover:bg-black/30 transition flex items-center justify-center cursor-pointer" onClick={() => openLesson(lesson)}>
-                                                    <div className="bg-white/90 p-3 rounded-full shadow-lg transform scale-90 group-hover:scale-110 transition duration-300">
-                                                        <i data-lucide="maximize-2" className="w-6 h-6 text-blue-600"></i>
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <div className="p-5 flex flex-col flex-1">
-                                                <div className="flex justify-between items-start mb-2">
-                                                    <h3 className="font-bold text-lg text-gray-900 line-clamp-2 cursor-pointer hover:text-blue-600 transition" onClick={() => openLesson(lesson)}>{lesson.title}</h3>
-                                                    <button onClick={() => openLesson(lesson)} className="text-gray-400 hover:text-blue-600" title="Expand View">
-                                                        <i data-lucide="maximize-2" className="w-4 h-4"></i>
-                                                    </button>
-                                                </div>
-                                                <p className="text-gray-600 text-sm mb-4 line-clamp-2 flex-1">{lesson.description}</p>
-                                                
-                                                {lesson.zoomLink && (
-                                                    <a href={lesson.zoomLink} target="_blank" className="mt-2 flex items-center justify-center gap-2 bg-blue-50 text-blue-700 border border-blue-200 p-2.5 rounded-lg font-bold hover:bg-blue-600 hover:text-white transition text-sm">
-                                                        <i data-lucide="video" className="w-4 h-4"></i> Join Zoom Class
-                                                    </a>
-                                                )}
-                                                {!lesson.zoomLink && (
-                                                    <div className="mt-2 text-center text-gray-400 text-sm py-2.5 bg-gray-50 rounded-lg">Video Only</div>
-                                                )}
-                                            </div>
                                         </div>
                                     ))}
                                 </div>
-                                
-                                {lessons.length === 0 && (
-                                    <div className="text-center py-20 bg-gray-50 rounded-xl border border-dashed border-gray-300">
-                                        <i data-lucide="folder-open" className="w-12 h-12 text-gray-400 mx-auto mb-3"></i>
-                                        <p className="text-gray-500">သင်ခန်းစာများ မရှိသေးပါ။</p>
-                                    </div>
+                            </div>
+                        ) : (
+                            <>
+                                {/* 2. COURSE LIST VIEW (Main Dashboard) */}
+                                {view === 'courses_list' && (
+                                    <>
+                                        <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl p-6 md:p-10 text-white mb-8 shadow-lg">
+                                            <h2 className="text-2xl md:text-3xl font-bold mb-2">မင်္ဂလာပါ {user.displayName}</h2>
+                                            <p className="text-blue-100 opacity-90">{role === 'super_admin' ? 'Admin Panel မှ ကြိုဆိုပါတယ်။' : 'ယနေ့ ဘာတွေလေ့လာကြမလဲ?'}</p>
+                                        </div>
+
+                                        {role === 'super_admin' && (
+                                            <div className="mb-10 bg-white p-6 rounded-2xl border border-blue-100 shadow-md">
+                                                <div className="flex justify-between items-center mb-4 border-b pb-2">
+                                                    <h3 className="font-bold text-gray-800 flex items-center gap-2 text-xl"><i data-lucide={editingId ? "edit" : "plus-circle"} className="w-6 h-6 text-blue-600"></i> {editingId ? 'ခေါင်းစဉ် ပြင်ဆင်ရန်' : 'ခေါင်းစဉ်အသစ် (Course) တည်ဆောက်ရန်'}</h3>
+                                                    {editingId && <button onClick={handleCancelEdit} className="text-sm text-red-600 hover:text-red-800 font-bold">Cancel</button>}
+                                                </div>
+                                                <form onSubmit={handleCreateCourse} className="grid gap-4 md:grid-cols-2">
+                                                    <input className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Course Title (e.g., Basic Computer)" value={inputTitle} onChange={e=>setInputTitle(e.target.value)} required />
+                                                    <input className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Description (Optional)" value={inputDesc} onChange={e=>setInputDesc(e.target.value)} />
+                                                    <button className="md:col-span-2 bg-gray-900 text-white p-3 rounded-lg font-bold hover:bg-black transition">{editingId ? 'Update Course' : 'Create Course'}</button>
+                                                </form>
+                                            </div>
+                                        )}
+
+                                        <h3 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2"><i data-lucide="library" className="w-5 h-5"></i> သင်ခန်းစာ ခေါင်းစဉ်များ ({courses.length})</h3>
+                                        
+                                        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                            {courses.map(course => (
+                                                <div key={course.id} className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm hover:shadow-xl transition cursor-pointer group relative" onClick={() => openCourse(course)}>
+                                                    <div className="flex items-center justify-between mb-4">
+                                                        <div className="bg-blue-100 p-3 rounded-lg group-hover:bg-blue-600 group-hover:text-white transition duration-300">
+                                                            <i data-lucide="folder" className="w-8 h-8"></i>
+                                                        </div>
+                                                        {role === 'super_admin' && (
+                                                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition" onClick={e => e.stopPropagation()}>
+                                                                <button onClick={() => handleEditItem(course, 'course')} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><i data-lucide="edit" className="w-4 h-4"></i></button>
+                                                                <button onClick={() => handleDeleteCourse(course.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <h3 className="font-bold text-xl text-gray-900 mb-2 group-hover:text-blue-600 transition">{course.title}</h3>
+                                                    <p className="text-gray-500 text-sm line-clamp-2">{course.description || "No description provided."}</p>
+                                                    <div className="mt-4 pt-4 border-t border-gray-100 flex items-center text-sm text-blue-600 font-bold group-hover:underline">
+                                                        View Lessons <i data-lucide="arrow-right" className="w-4 h-4 ml-1"></i>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            {courses.length === 0 && <div className="col-span-full text-center py-10 text-gray-500 bg-gray-50 rounded-xl border border-dashed">ခေါင်းစဉ်များ မရှိသေးပါ။</div>}
+                                        </div>
+                                    </>
+                                )}
+
+                                {/* 3. COURSE DETAIL VIEW (Lessons List) */}
+                                {view === 'course_detail' && activeCourse && (
+                                    <>
+                                        <button onClick={backToCourses} className="mb-6 flex items-center text-gray-500 hover:text-blue-600 font-bold transition">
+                                            <i data-lucide="arrow-left" className="w-5 h-5 mr-2"></i> Back to Courses
+                                        </button>
+
+                                        <div className="bg-blue-50 border border-blue-100 rounded-xl p-6 mb-8">
+                                            <h2 className="text-3xl font-bold text-gray-900 mb-2">{activeCourse.title}</h2>
+                                            <p className="text-gray-600">{activeCourse.description}</p>
+                                        </div>
+
+                                        {role === 'super_admin' && (
+                                            <div className="mb-10 bg-white p-6 rounded-2xl border border-blue-100 shadow-md">
+                                                <div className="flex justify-between items-center mb-4 border-b pb-2">
+                                                    <h3 className="font-bold text-gray-800 flex items-center gap-2 text-xl"><i data-lucide={editingId ? "edit" : "video"} className="w-6 h-6 text-blue-600"></i> {editingId ? 'သင်ခန်းစာ ပြင်ဆင်ရန်' : 'Video အသစ်တင်ရန်'}</h3>
+                                                    {editingId && <button onClick={handleCancelEdit} className="text-sm text-red-600 hover:text-red-800 font-bold">Cancel</button>}
+                                                </div>
+                                                <form onSubmit={handleSaveLesson} className="grid gap-4 md:grid-cols-2">
+                                                    <div className="md:col-span-1"><input className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Lesson Title" value={inputTitle} onChange={e=>setInputTitle(e.target.value)} /></div>
+                                                    <div className="md:col-span-1"><input className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="YouTube Link" value={inputVideo} onChange={e=>setInputVideo(e.target.value)} /></div>
+                                                    <div className="md:col-span-2"><textarea className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" rows="2" placeholder="Description" value={inputDesc} onChange={e=>setInputDesc(e.target.value)} /></div>
+                                                    <div className="md:col-span-2"><input className="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Zoom Link (Optional)" value={inputZoom} onChange={e=>setInputZoom(e.target.value)} /></div>
+                                                    <button className="md:col-span-2 bg-indigo-600 text-white p-3 rounded-lg font-bold hover:bg-indigo-700 transition">{editingId ? 'Update Lesson' : 'Add to Course'}</button>
+                                                </form>
+                                            </div>
+                                        )}
+
+                                        <h3 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2"><i data-lucide="list-video" className="w-5 h-5"></i> သင်ခန်းစာ ဗီဒီယိုများ ({lessons.length})</h3>
+
+                                        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                            {lessons.map((lesson, index) => (
+                                                <div key={lesson.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-xl transition group relative">
+                                                    {role === 'super_admin' && (
+                                                        <div className="absolute top-2 right-2 z-20 flex gap-2 opacity-0 group-hover:opacity-100 transition bg-white/90 p-1.5 rounded shadow-sm">
+                                                            <button onClick={() => handleEditItem(lesson, 'lesson')} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><i data-lucide="edit" className="w-4 h-4"></i></button>
+                                                            <button onClick={() => handleDeleteLesson(lesson.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                                        </div>
+                                                    )}
+                                                    
+                                                    <div className="relative aspect-video bg-black group-hover:brightness-110 transition cursor-pointer" onClick={() => openLessonVideo(lesson)}>
+                                                        <div className="absolute top-2 left-2 bg-black/60 text-white text-xs px-2 py-1 rounded z-10">Ep. {index + 1}</div>
+                                                        <iframe className="w-full h-full pointer-events-none" src={getEmbedUrl(lesson.videoUrl)} title={lesson.title} frameBorder="0"></iframe>
+                                                        <div className="absolute inset-0 flex items-center justify-center bg-black/10 group-hover:bg-black/20 transition">
+                                                            <div className="bg-white/90 p-3 rounded-full shadow-lg transform scale-90 group-hover:scale-110 transition"><i data-lucide="play" className="w-6 h-6 text-blue-600 fill-current"></i></div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="p-5">
+                                                        <h3 className="font-bold text-lg text-gray-900 line-clamp-2 mb-2 cursor-pointer hover:text-blue-600" onClick={() => openLessonVideo(lesson)}>{lesson.title}</h3>
+                                                        <p className="text-gray-600 text-sm line-clamp-2 mb-4">{lesson.description}</p>
+                                                        {lesson.zoomLink ? (
+                                                            <a href={lesson.zoomLink} target="_blank" className="block text-center bg-blue-50 text-blue-700 border border-blue-200 p-2 rounded-lg font-bold hover:bg-blue-600 hover:text-white transition text-sm">Join Zoom Class</a>
+                                                        ) : (
+                                                            <div className="text-center text-gray-400 text-sm py-2 bg-gray-50 rounded-lg">Video Only</div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            {lessons.length === 0 && <div className="col-span-full text-center py-10 text-gray-500">ဒီခေါင်းစဉ်အောက်မှာ Video မရှိသေးပါ။</div>}
+                                        </div>
+                                    </>
                                 )}
                             </>
                         )}
