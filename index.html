@@ -579,12 +579,11 @@
                 );
             }
 
-            // 2. Login View (Modified Left Side with Image)
+            // 2. Login View
             if (!user && view === 'landing') {
                 return (
                     <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
                         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl flex overflow-hidden min-h-[600px]">
-                            {/* Left Side */}
                             <div className="hidden md:flex w-1/2 bg-gradient-to-br from-blue-900 to-blue-700 flex-col relative text-white">
                                 <div className="w-full h-[55%] relative">
                                     <img 
@@ -604,7 +603,6 @@
                                     <div className="mt-8 text-xs opacity-50">© 2025 The Global Network. All rights reserved.</div>
                                 </div>
                             </div>
-                            {/* Right Side */}
                             <div className="w-full md:w-1/2 p-8 md:p-12 flex flex-col justify-center bg-white">
                                 <div className="text-center md:text-left mb-8">
                                     <div className="md:hidden flex justify-center mb-4">
@@ -706,7 +704,10 @@
                     {/* Navbar */}
                     <nav className="bg-blue-900 text-white p-4 sticky top-0 z-50 shadow-md">
                         <div className="max-w-6xl mx-auto flex justify-between items-center">
-                            <div className="font-bold flex items-center gap-2 text-lg cursor-pointer" onClick={backToCourses}><i data-lucide="book-open" className="w-6 h-6 text-blue-300"></i> TGN Online</div>
+                            <div className="font-bold flex items-center gap-3 text-lg cursor-pointer" onClick={backToCourses}>
+                                 <img src="data/logo.png" alt="TGN Logo" className="h-10 w-auto object-contain bg-white/10 rounded-lg p-1" onError={(e) => { e.target.style.display = 'none'; }} />
+                                 <span>TGN Online</span>
+                            </div>
                             <div className="flex items-center gap-4">
                                 
                                 {/* Notification Bell */}
