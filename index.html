@@ -89,6 +89,33 @@
 
         const { useState, useEffect } = React;
 
+        // --- Helper Component for Description (See More/Less) ---
+        const DescriptionText = ({ text }) => {
+            const [isExpanded, setIsExpanded] = useState(false);
+            const maxLength = 100; // Character limit before truncation
+
+            if (!text) return <p className="text-gray-500 italic text-sm">No description provided.</p>;
+
+            // Check if text needs truncation
+            const shouldTruncate = text.length > maxLength;
+            
+            return (
+                <div className="text-sm text-gray-600 mb-4 leading-relaxed">
+                    <p className="whitespace-pre-line">
+                        {isExpanded || !shouldTruncate ? text : `${text.slice(0, maxLength)}...`}
+                    </p>
+                    {shouldTruncate && (
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+                            className="text-blue-600 hover:text-blue-800 text-xs font-bold mt-1 focus:outline-none"
+                        >
+                            {isExpanded ? "See Less (အကျဉ်းချူပ်)" : "See More (ဆက်လက်ဖတ်ရှုရန်)"}
+                        </button>
+                    )}
+                </div>
+            );
+        };
+
         // --- Main App Component ---
         function App() {
             const [user, setUser] = useState(null);
@@ -97,17 +124,15 @@
             const [accountStatus, setAccountStatus] = useState('pending'); 
             const [loading, setLoading] = useState(true);
             
-            // Views: 'landing', 'courses_list', 'course_detail', 'pending_approval', 'suspended_account'
             const [view, setView] = useState('landing');
 
             // Data States
             const [courses, setCourses] = useState([]);
             const [lessons, setLessons] = useState([]);
-            const [activeCourse, setActiveCourse] = useState(null); // The course currently being viewed
+            const [activeCourse, setActiveCourse] = useState(null); 
             const [allUsers, setAllUsers] = useState([]);
             
-            // Admin Filter
-            const [adminTab, setAdminTab] = useState('courses'); // 'courses', 'users'
+            const [adminTab, setAdminTab] = useState('courses'); 
             const [userFilter, setUserFilter] = useState('all');
 
             // Form States
@@ -117,7 +142,7 @@
             const [error, setError] = useState('');
             const [rememberMe, setRememberMe] = useState(true);
             
-            // Input States (Course & Lesson)
+            // Input States
             const [inputTitle, setInputTitle] = useState('');
             const [inputDesc, setInputDesc] = useState('');
             const [inputVideo, setInputVideo] = useState('');
@@ -175,15 +200,12 @@
                 return () => unsubscribe();
             }, []);
 
-            // 1. Fetch Courses (Always active for approved users)
+            // 1. Fetch Courses
             useEffect(() => {
                 if (!user || accountStatus !== 'approved') return;
-                
-                // Using client-side sort for courses to be safe
                 const q = collection(db, 'courses');
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
-                    // Sort descending by created time
                     data.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
                     setCourses(data);
                     setTimeout(() => window.lucide && window.lucide.createIcons(), 100);
@@ -191,42 +213,28 @@
                 return () => unsubscribe();
             }, [user, accountStatus]);
 
-            // 2. Fetch Lessons (Only when a Course is Active) - FIXED INDEX ERROR
+            // 2. Fetch Lessons
             useEffect(() => {
                 if (!user || accountStatus !== 'approved' || !activeCourse) {
                     setLessons([]); 
                     return;
                 }
-                
-                // FIX: Removed 'orderBy' from Firestore query to avoid needing a composite index.
-                // We will sort in memory (JavaScript) instead.
-                const q = query(
-                    collection(db, 'lessons'), 
-                    where('courseId', '==', activeCourse.id)
-                );
-                
+                const q = query(collection(db, 'lessons'), where('courseId', '==', activeCourse.id));
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
-                    // Sort ascending (Oldest first) for lesson playlist
                     data.sort((a,b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
                     setLessons(data);
                     setTimeout(() => window.lucide && window.lucide.createIcons(), 100);
-                }, (err) => {
-                    console.error("Lesson fetch error:", err);
                 });
-                
                 return () => unsubscribe();
             }, [user, accountStatus, activeCourse]);
 
             // 3. Admin: Fetch All Users
             useEffect(() => {
                 if (role !== 'super_admin' || adminTab !== 'users') return;
-                
-                // Client-side sort for users too
                 const q = collection(db, 'users');
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     const users = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
-                    // Sort descending
                     users.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
                     setAllUsers(users);
                 });
@@ -277,20 +285,12 @@
                 try {
                     const userRef = doc(db, 'users', userId);
                     await updateDoc(userRef, { status: newStatus });
-                } catch (e) {
-                    console.error(e);
-                    alert("Error updating user.");
-                }
+                } catch (e) { alert("Error updating user."); }
             };
 
             const handleDeleteUser = async (userId) => {
                 if(!confirm("ဤအကောင့်ကို အပြီးတိုင် ဖျက်သိမ်းရန် သေချာပါသလား?")) return;
-                try {
-                    await deleteDoc(doc(db, 'users', userId));
-                } catch (e) {
-                    console.error(e);
-                    alert("ဖျက်၍မရပါ။");
-                }
+                try { await deleteDoc(doc(db, 'users', userId)); } catch (e) { alert("ဖျက်၍မရပါ။"); }
             };
 
             // --- Course & Lesson Management ---
@@ -318,16 +318,12 @@
                         alert("ခေါင်းစဉ်အသစ် တည်ဆောက်ပြီးပါပြီ!");
                     }
                     setInputTitle(''); setInputDesc(''); setEditingId(null);
-                } catch (e) {
-                    alert("Error creating course.");
-                }
+                } catch (e) { alert("Error creating course."); }
             };
 
             const handleDeleteCourse = async (id) => {
                 if(!confirm("ဤခေါင်းစဉ်နှင့်တကွ အောက်ရှိသင်ခန်းစာများအားလုံး ဖျက်မည်မှာ သေချာပါသလား?")) return;
-                try {
-                    await deleteDoc(doc(db, 'courses', id));
-                } catch(e) { alert("Error deleting course"); }
+                try { await deleteDoc(doc(db, 'courses', id)); } catch(e) { alert("Error deleting course"); }
             };
 
             const handleSaveLesson = async (e) => {
@@ -341,7 +337,7 @@
 
                 try {
                     const lessonData = {
-                        courseId: activeCourse.id, // Link to current course
+                        courseId: activeCourse.id, 
                         title: inputTitle,
                         description: inputDesc,
                         videoUrl: inputVideo,
@@ -359,10 +355,7 @@
                         alert("သင်ခန်းစာ တင်ပြီးပါပြီ!");
                     }
                     setInputTitle(''); setInputDesc(''); setInputVideo(''); setInputZoom(''); setEditingId(null);
-                } catch (e) {
-                    alert("Error: မအောင်မြင်ပါ။");
-                    console.error(e);
-                }
+                } catch (e) { alert("Error: မအောင်မြင်ပါ။"); }
             };
             
             const handleEditItem = (item, type) => {
@@ -383,14 +376,9 @@
 
             const handleDeleteLesson = async (id) => {
                 if(!confirm("ဤသင်ခန်းစာကို ဖျက်ရန် သေချာပါသလား?")) return;
-                try {
-                    await deleteDoc(doc(db, 'lessons', id));
-                } catch (e) {
-                    alert("ဖျက်၍မရပါ။ Permission စစ်ဆေးပါ။");
-                }
+                try { await deleteDoc(doc(db, 'lessons', id)); } catch (e) { alert("ဖျက်၍မရပါ။ Permission စစ်ဆေးပါ။"); }
             };
 
-            // Navigation Handlers
             const openCourse = (course) => {
                 setActiveCourse(course);
                 setView('course_detail');
@@ -527,7 +515,10 @@
                                     <div className="flex items-start gap-4">
                                         <div className="flex-1">
                                             <h4 className="font-bold text-xl mb-2">{activeLesson.title}</h4>
-                                            <p className="text-gray-400 text-sm leading-relaxed">{activeLesson.description}</p>
+                                            {/* Using new Description Component in Modal */}
+                                            <div className="text-gray-400 text-sm leading-relaxed whitespace-pre-line">
+                                                {activeLesson.description}
+                                            </div>
                                         </div>
                                         {activeLesson.zoomLink && (
                                             <a href={activeLesson.zoomLink} target="_blank" className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-bold transition flex items-center gap-2"><i data-lucide="video" className="w-5 h-5"></i> Join Zoom Class</a>
@@ -638,7 +629,8 @@
                                                         )}
                                                     </div>
                                                     <h3 className="font-bold text-xl text-gray-900 mb-2 group-hover:text-blue-600 transition">{course.title}</h3>
-                                                    <p className="text-gray-500 text-sm line-clamp-2">{course.description || "No description provided."}</p>
+                                                    {/* Course Desc */}
+                                                    <div className="text-gray-500 text-sm line-clamp-2">{course.description || "No description provided."}</div>
                                                     <div className="mt-4 pt-4 border-t border-gray-100 flex items-center text-sm text-blue-600 font-bold group-hover:underline">
                                                         View Lessons <i data-lucide="arrow-right" className="w-4 h-4 ml-1"></i>
                                                     </div>
@@ -658,7 +650,8 @@
 
                                         <div className="bg-blue-50 border border-blue-100 rounded-xl p-6 mb-8">
                                             <h2 className="text-3xl font-bold text-gray-900 mb-2">{activeCourse.title}</h2>
-                                            <p className="text-gray-600">{activeCourse.description}</p>
+                                            {/* Expandable Course Description */}
+                                            <DescriptionText text={activeCourse.description} />
                                         </div>
 
                                         {role === 'super_admin' && (
@@ -699,7 +692,10 @@
 
                                                     <div className="p-5">
                                                         <h3 className="font-bold text-lg text-gray-900 line-clamp-2 mb-2 cursor-pointer hover:text-blue-600" onClick={() => openLessonVideo(lesson)}>{lesson.title}</h3>
-                                                        <p className="text-gray-600 text-sm line-clamp-2 mb-4">{lesson.description}</p>
+                                                        
+                                                        {/* Expandable Lesson Description in Card */}
+                                                        <DescriptionText text={lesson.description} />
+
                                                         {lesson.zoomLink ? (
                                                             <a href={lesson.zoomLink} target="_blank" className="block text-center bg-blue-50 text-blue-700 border border-blue-200 p-2 rounded-lg font-bold hover:bg-blue-600 hover:text-white transition text-sm">Join Zoom Class</a>
                                                         ) : (
